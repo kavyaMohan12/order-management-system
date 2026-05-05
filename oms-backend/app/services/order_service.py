@@ -6,7 +6,15 @@ from app.core.constants import (
     ORDER_EDITABLE_STATUSES,
     ORDER_PENDING,
 )
-from app.models import Order, OrderItem, Product
+from app.core.exceptions import (
+    ForbiddenError,
+    InsufficientStockError,
+    OrderNotCancellableError,
+    OrderNotEditableError,
+    OrderNotFoundError,
+    UnknownProductError,
+)
+from app.models import Order, OrderItem, Product, User
 
 
 def _lines_from_payload(items: list) -> list[tuple[int, int]]:
@@ -16,6 +24,15 @@ def _lines_from_payload(items: list) -> list[tuple[int, int]]:
     return list(merged.items())
 
 
+def _validate_lines_against_stock(db: Session, lines: list[tuple[int, int]]) -> None:
+    for product_id, quantity in lines:
+        product = db.get(Product, product_id)
+        if not product:
+            raise UnknownProductError(product_id)
+        if product.stock < quantity:
+            raise InsufficientStockError(product_id)
+
+
 def create_order(
     db: Session,
     user_id: int,
@@ -23,12 +40,7 @@ def create_order(
     items: list,
 ) -> Order:
     lines = _lines_from_payload(items)
-    for product_id, quantity in lines:
-        product = db.get(Product, product_id)
-        if not product:
-            raise ValueError(f"unknown_product:{product_id}")
-        if product.stock < quantity:
-            raise ValueError(f"insufficient_stock:{product_id}")
+    _validate_lines_against_stock(db, lines)
 
     order = Order(
         user_id=user_id,
@@ -74,6 +86,15 @@ def get_order_by_id(db: Session, order_id: int) -> Order | None:
     return db.scalars(stmt).first()
 
 
+def load_owned_order(db: Session, order_id: int, user: User) -> Order:
+    order = get_order_by_id(db, order_id)
+    if order is None:
+        raise OrderNotFoundError()
+    if order.user_id != user.id:
+        raise ForbiddenError()
+    return order
+
+
 def _get_order_with_items(db: Session, order_id: int) -> Order:
     order = get_order_by_id(db, order_id)
     assert order is not None
@@ -87,7 +108,7 @@ def update_order(
     new_items: list | None,
 ) -> Order:
     if order.status not in ORDER_EDITABLE_STATUSES:
-        raise ValueError("not_editable")
+        raise OrderNotEditableError()
 
     if new_items is not None:
         lines = _lines_from_payload(new_items)
@@ -98,12 +119,7 @@ def update_order(
             db.delete(oi)
         db.flush()
 
-        for product_id, quantity in lines:
-            product = db.get(Product, product_id)
-            if not product:
-                raise ValueError(f"unknown_product:{product_id}")
-            if product.stock < quantity:
-                raise ValueError(f"insufficient_stock:{product_id}")
+        _validate_lines_against_stock(db, lines)
 
         for product_id, quantity in lines:
             product = db.get(Product, product_id)
@@ -131,7 +147,7 @@ def cancel_order(db: Session, order: Order) -> Order:
         return _get_order_with_items(db, order.id)
 
     if order.status not in ORDER_EDITABLE_STATUSES:
-        raise ValueError("not_cancellable")
+        raise OrderNotCancellableError()
 
     for oi in order.items:
         product = db.get(Product, oi.product_id)
