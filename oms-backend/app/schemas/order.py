@@ -5,11 +5,23 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 class OrderItemLineIn(BaseModel):
     product_id: int = Field(ge=1)
-    quantity: int = Field(ge=1)
+    quantity: int = Field(ge=1, le=1000)
 
 
 class OrderCreate(BaseModel):
-    shipping_address: str = Field(min_length=1)
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "shipping_address": "1 Main St, Springfield",
+                "items": [
+                    {"product_id": 1, "quantity": 2},
+                    {"product_id": 2, "quantity": 1},
+                ],
+            }
+        }
+    )
+
+    shipping_address: str = Field(min_length=1, max_length=500)
     items: list[OrderItemLineIn] = Field(min_length=1)
 
 
@@ -33,7 +45,16 @@ class OrderRead(BaseModel):
 
 
 class OrderUpdate(BaseModel):
-    shipping_address: str | None = None
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "shipping_address": "42 New Address Ave",
+                "items": [{"product_id": 1, "quantity": 3}],
+            }
+        }
+    )
+
+    shipping_address: str | None = Field(default=None, max_length=500)
     items: list[OrderItemLineIn] | None = None
 
     @field_validator("shipping_address")
